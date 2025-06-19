@@ -1,9 +1,11 @@
-
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, Plus, Settings } from "lucide-react";
+import { Calendar, Clock, Plus, Settings, Users, Bell } from "lucide-react";
+import { useDragAndDrop } from "@/hooks/useDragAndDrop";
+import { useRealTimeUpdates } from "@/hooks/useRealTimeUpdates";
+import { useToast } from "@/hooks/use-toast";
 
 interface Task {
   id: string;
@@ -101,8 +103,11 @@ const sampleTasks: Task[] = [
 ];
 
 const TimelineView = ({ project }: TimelineViewProps) => {
-  const [tasks] = useState<Task[]>(sampleTasks);
+  const [tasks, setTasks] = useState<Task[]>(sampleTasks);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const { toast } = useToast();
+  const { isDragging, handleDragStart, handleDragEnd, handleDrop } = useDragAndDrop();
+  const { updates, connectedUsers } = useRealTimeUpdates();
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
@@ -149,8 +154,97 @@ const TimelineView = ({ project }: TimelineViewProps) => {
 
   const totalProjectDays = getDaysFromStart(project.endDate, project.startDate);
 
+  const handleTaskDrop = (taskId: string, newStartDate: string) => {
+    const taskIndex = tasks.findIndex(t => t.id === taskId);
+    if (taskIndex === -1) return;
+
+    const task = tasks[taskIndex];
+    const duration = getTaskDuration(task.startDate, task.endDate);
+    const newEndDate = new Date(new Date(newStartDate).getTime() + (duration - 1) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const updatedTasks = [...tasks];
+    updatedTasks[taskIndex] = {
+      ...task,
+      startDate: newStartDate,
+      endDate: newEndDate,
+    };
+
+    setTasks(updatedTasks);
+    toast({
+      title: "Task Updated",
+      description: `${task.name} has been rescheduled to ${new Date(newStartDate).toLocaleDateString()}`,
+    });
+  };
+
+  const calculateDropDate = (clientX: number, timelineElement: HTMLElement) => {
+    const rect = timelineElement.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const percentage = x / rect.width;
+    const dayOffset = Math.floor(percentage * totalProjectDays);
+    
+    const newDate = new Date(project.startDate);
+    newDate.setDate(newDate.getDate() + dayOffset);
+    return newDate.toISOString().split('T')[0];
+  };
+
   return (
     <div className="p-6 space-y-6">
+      {/* Real-time Updates Banner */}
+      <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
+            <Users className="h-4 w-4 text-blue-600" />
+            <span className="text-sm font-medium text-blue-900">
+              {connectedUsers.length} users online
+            </span>
+          </div>
+          <div className="flex -space-x-1">
+            {connectedUsers.slice(0, 3).map((user, index) => (
+              <div
+                key={user}
+                className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-medium border-2 border-white"
+                title={user}
+              >
+                {user.charAt(0)}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center space-x-2">
+          <Bell className="h-4 w-4 text-blue-600" />
+          <span className="text-sm text-blue-700">Live updates active</span>
+          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+        </div>
+      </div>
+
+      {/* Recent Updates */}
+      {updates.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Recent Activity</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {updates.slice(0, 3).map((update) => (
+                <div key={update.id} className="flex items-center space-x-3 text-sm">
+                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                  <span className="font-medium">{update.user}</span>
+                  <span className="text-gray-600">
+                    {update.type === 'task-updated' 
+                      ? `updated ${update.data.taskName} to ${update.data.progress}%`
+                      : 'joined the project'
+                    }
+                  </span>
+                  <span className="text-gray-400 text-xs ml-auto">
+                    {update.timestamp.toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Project Overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
@@ -196,11 +290,11 @@ const TimelineView = ({ project }: TimelineViewProps) => {
         </Card>
       </div>
 
-      {/* Gantt Chart */}
+      {/* Enhanced Gantt Chart with Drag & Drop */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Project Timeline</CardTitle>
+            <CardTitle>Project Timeline - Drag tasks to reschedule</CardTitle>
             <div className="flex items-center space-x-2">
               <Button variant="outline" size="sm">
                 <Plus className="h-4 w-4 mr-2" />
@@ -221,7 +315,7 @@ const TimelineView = ({ project }: TimelineViewProps) => {
               <div className="w-32">Assignee</div>
               <div className="w-24">Priority</div>
               <div className="w-24">Progress</div>
-              <div className="flex-1 min-w-0">Timeline</div>
+              <div className="flex-1 min-w-0">Timeline (Drag to reschedule)</div>
             </div>
 
             {/* Task Rows */}
@@ -234,9 +328,9 @@ const TimelineView = ({ project }: TimelineViewProps) => {
               return (
                 <div
                   key={task.id}
-                  className={`flex items-center space-x-4 py-3 border-b hover:bg-gray-50 cursor-pointer transition-colors ${
+                  className={`flex items-center space-x-4 py-3 border-b hover:bg-gray-50 transition-colors ${
                     selectedTask?.id === task.id ? "bg-blue-50" : ""
-                  }`}
+                  } ${isDragging ? "pointer-events-none" : ""}`}
                   onClick={() => setSelectedTask(task)}
                 >
                   <div className="w-64 truncate font-medium">{task.name}</div>
@@ -249,16 +343,31 @@ const TimelineView = ({ project }: TimelineViewProps) => {
                     </Badge>
                   </div>
                   <div className="w-24 text-sm">{task.progress}%</div>
-                  <div className="flex-1 min-w-0 relative h-8">
+                  <div 
+                    className="flex-1 min-w-0 relative h-8"
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const timelineElement = e.currentTarget;
+                      const newDate = calculateDropDate(e.clientX, timelineElement);
+                      handleDrop(() => handleTaskDrop(task.id, newDate));
+                    }}
+                    onDragOver={(e) => e.preventDefault()}
+                  >
                     <div className="absolute inset-y-0 left-0 right-0 bg-gray-100 rounded"></div>
                     <div
                       className={`absolute top-1 bottom-1 rounded ${getStatusColor(
                         task.status
-                      )} flex items-center px-2`}
+                      )} flex items-center px-2 cursor-move transition-transform hover:scale-105 ${
+                        isDragging ? "opacity-50" : ""
+                      }`}
                       style={{
                         left: `${barLeft}%`,
                         width: `${barWidth}%`,
                       }}
+                      draggable
+                      onDragStart={() => handleDragStart({ id: task.id, type: 'task', data: task })}
+                      onDragEnd={handleDragEnd}
+                      title="Drag to reschedule"
                     >
                       <div className="text-xs text-white font-medium truncate">
                         {task.progress}%
